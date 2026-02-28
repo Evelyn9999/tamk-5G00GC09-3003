@@ -35,6 +35,10 @@ debug_*.py
 # Session files (sensitive cookies)
 linkedin_session.json
 
+# Pipeline data (database + generated reports)
+data/jobs.db
+data/reports/
+
 # Build artifacts
 MANIFEST
 MANIFEST.ini
