@@ -100,13 +100,28 @@ class JobScraper(BaseScraper):
         return job
     
     async def _get_job_title(self) -> Optional[str]:
-        """Extract job title from h1 heading."""
-        try:
-            title_elem = self.page.locator('h1').first
-            title = await title_elem.inner_text()
-            return title.strip()
-        except:
-            return None
+        """Extract job title using multiple selector strategies."""
+        selectors = [
+            'h1.t-24',
+            'h1.t-20',
+            'h1.jobs-unified-top-card__job-title',
+            'h1[class*="job-title"]',
+            'h1[class*="topcard__title"]',
+            '.job-details-jobs-unified-top-card__job-title h1',
+            '.top-card-layout__title',
+            'h1',
+        ]
+        for selector in selectors:
+            try:
+                elem = self.page.locator(selector).first
+                if await elem.count() > 0:
+                    title = await elem.inner_text()
+                    title = title.strip()
+                    if title and len(title) > 1:
+                        return title
+            except:
+                continue
+        return None
     
     async def _get_company(self) -> Optional[str]:
         """Extract company name from company link."""
@@ -141,16 +156,31 @@ class JobScraper(BaseScraper):
     
     async def _get_location(self) -> Optional[str]:
         """Extract job location from job details panel."""
+        selectors = [
+            '.job-details-jobs-unified-top-card__primary-description-container span',
+            '.jobs-unified-top-card__subtitle-primary-grouping span',
+            '.topcard__flavor--bullet',
+            '.top-card-layout__second-subline span',
+        ]
+        for selector in selectors:
+            try:
+                elements = await self.page.locator(selector).all()
+                for elem in elements:
+                    text = (await elem.inner_text()).strip()
+                    if text and len(text) > 3 and len(text) < 100 and not text.startswith('$'):
+                        if ',' in text or 'Remote' in text or 'Finland' in text or 'Hybrid' in text:
+                            return text
+            except:
+                continue
+
         try:
             job_panel = self.page.locator('h1').first.locator('xpath=ancestor::*[5]')
             if await job_panel.count() > 0:
                 text_elements = await job_panel.locator('span, div').all()
                 for elem in text_elements:
-                    text = await elem.inner_text()
-                    if text and (',' in text or 'Remote' in text or 'United States' in text):
-                        text = text.strip()
-                        if len(text) > 3 and len(text) < 100 and not text.startswith('$'):
-                            return text
+                    text = (await elem.inner_text()).strip()
+                    if text and (',' in text or 'Remote' in text) and len(text) > 3 and len(text) < 100 and not text.startswith('$'):
+                        return text
         except:
             pass
         return None
@@ -188,18 +218,32 @@ class JobScraper(BaseScraper):
     
     async def _get_description(self) -> Optional[str]:
         """Extract job description from article or about section."""
+        selectors = [
+            '.jobs-description__content',
+            '.jobs-description-content__text',
+            '#job-details',
+            'article[class*="jobs-description"]',
+        ]
+        for selector in selectors:
+            try:
+                elem = self.page.locator(selector).first
+                if await elem.count() > 0:
+                    description = (await elem.inner_text()).strip()
+                    if description and len(description) > 20:
+                        return description
+            except:
+                continue
+
         try:
             about_heading = self.page.locator('h2:has-text("About the job")').first
             if await about_heading.count() > 0:
                 article = about_heading.locator('xpath=ancestor::article[1]')
                 if await article.count() > 0:
-                    description = await article.inner_text()
-                    return description.strip()
+                    return (await article.inner_text()).strip()
             
             article = self.page.locator('article').first
             if await article.count() > 0:
-                description = await article.inner_text()
-                return description.strip()
+                return (await article.inner_text()).strip()
         except:
             pass
         return None

@@ -42,6 +42,7 @@ class JobSearchScraper(BaseScraper):
         self,
         keywords: Optional[str] = None,
         location: Optional[str] = None,
+        time_filter: Optional[str] = None,
         limit: int = 25
     ) -> List[str]:
         """
@@ -50,42 +51,67 @@ class JobSearchScraper(BaseScraper):
         Args:
             keywords: Job search keywords (e.g., "software engineer")
             location: Job location (e.g., "San Francisco, CA")
+            time_filter: Time filter — "day", "week", or "month"
             limit: Maximum number of job URLs to return
             
         Returns:
             List of job posting URLs
         """
-        logger.info(f"Starting job search: keywords='{keywords}', location='{location}'")
+        logger.info(f"Starting job search: keywords='{keywords}', location='{location}', time='{time_filter}'")
         
-        search_url = self._build_search_url(keywords, location)
-        await self.callback.on_start("JobSearch", search_url)
-        
-        await self.navigate_and_wait(search_url)
-        await self.callback.on_progress("Navigated to search results", 20)
-        
-        try:
-            await self.page.wait_for_selector('a[href*="/jobs/view/"]', timeout=10000)
-        except:
-            logger.warning("No job listings found on page")
-            return []
-        
-        await self.wait_and_focus(1)
-        await self.scroll_page_to_bottom(pause_time=1, max_scrolls=3)
-        await self.callback.on_progress("Loaded job listings", 50)
-        
-        job_urls = await self._extract_job_urls(limit)
-        await self.callback.on_progress(f"Found {len(job_urls)} job URLs", 90)
-        
+        base_search_url = self._build_search_url(keywords, location, time_filter)
+        await self.callback.on_start("JobSearch", base_search_url)
+
+        job_urls = []
+        seen_urls = set()
+        page_num = 0
+        jobs_per_page = 25
+
+        while len(job_urls) < limit:
+            start = page_num * jobs_per_page
+            page_url = f"{base_search_url}&start={start}" if '?' in base_search_url else f"{base_search_url}?start={start}"
+
+            logger.info(f"Loading search results page {page_num + 1} (start={start})")
+            await self.navigate_and_wait(page_url)
+            await self.callback.on_progress(f"Loading page {page_num + 1}", 20)
+
+            try:
+                await self.page.wait_for_selector('a[href*="/jobs/view/"]', timeout=10000)
+            except:
+                logger.info("No more job listings found")
+                break
+
+            await self.wait_and_focus(1)
+            await self.scroll_page_to_bottom(pause_time=1, max_scrolls=5)
+
+            new_urls = await self._extract_job_urls(limit - len(job_urls), seen_urls)
+            if not new_urls:
+                break
+
+            job_urls.extend(new_urls)
+            for url in new_urls:
+                seen_urls.add(url)
+
+            await self.callback.on_progress(f"Found {len(job_urls)} job URLs so far", 50)
+            page_num += 1
+
         await self.callback.on_progress("Search complete", 100)
         await self.callback.on_complete("JobSearch", job_urls)
         
-        logger.info(f"Job search complete: found {len(job_urls)} jobs")
+        logger.info(f"Job search complete: found {len(job_urls)} jobs across {page_num + 1} page(s)")
         return job_urls
     
+    TIME_FILTER_MAP = {
+        "day": "r86400",
+        "week": "r604800",
+        "month": "r2592000",
+    }
+
     def _build_search_url(
         self,
         keywords: Optional[str] = None,
-        location: Optional[str] = None
+        location: Optional[str] = None,
+        time_filter: Optional[str] = None,
     ) -> str:
         """Build LinkedIn job search URL with parameters."""
         base_url = "https://www.linkedin.com/jobs/search/"
@@ -95,28 +121,32 @@ class JobSearchScraper(BaseScraper):
             params['keywords'] = keywords
         if location:
             params['location'] = location
+        if time_filter and time_filter in self.TIME_FILTER_MAP:
+            params['f_TPR'] = self.TIME_FILTER_MAP[time_filter]
         
         if params:
             return f"{base_url}?{urlencode(params)}"
         return base_url
     
-    async def _extract_job_urls(self, limit: int) -> List[str]:
+    async def _extract_job_urls(self, limit: int, seen_urls: Optional[set] = None) -> List[str]:
         """
-        Extract job URLs from search results.
+        Extract job URLs from the current search results page.
         
         Args:
-            limit: Maximum number of URLs to extract
+            limit: Maximum number of new URLs to extract
+            seen_urls: Set of already-seen URLs to skip
             
         Returns:
-            List of job posting URLs
+            List of new job posting URLs found on this page
         """
+        if seen_urls is None:
+            seen_urls = set()
+
         job_urls = []
         
         try:
-            # Find all job cards/links
             job_links = await self.page.locator('a[href*="/jobs/view/"]').all()
             
-            seen_urls = set()
             for link in job_links:
                 if len(job_urls) >= limit:
                     break
@@ -124,14 +154,11 @@ class JobSearchScraper(BaseScraper):
                 try:
                     href = await link.get_attribute('href')
                     if href and '/jobs/view/' in href:
-                        # Clean URL (remove query params)
                         clean_url = href.split('?')[0] if '?' in href else href
                         
-                        # Ensure full URL
                         if not clean_url.startswith('http'):
                             clean_url = f"https://www.linkedin.com{clean_url}"
                         
-                        # Avoid duplicates
                         if clean_url not in seen_urls:
                             job_urls.append(clean_url)
                             seen_urls.add(clean_url)
