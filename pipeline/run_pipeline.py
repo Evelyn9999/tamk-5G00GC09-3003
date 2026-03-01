@@ -4,8 +4,8 @@ Main entry point — orchestrates the full pipeline.
 Steps:
   1. EXTRACT   — scrape LinkedIn + read CSV
   2. TRANSFORM — validate, clean, deduplicate, enrich
-  3. LOAD      — write to SQLite database
-  4. DETECT    — compare with previous run, log changes
+  3. DETECT    — compare with previous run, log changes
+  4. LOAD      — write to SQLite database
   5. REPORT    — generate weekly checklist + reminders
 
 Usage:
